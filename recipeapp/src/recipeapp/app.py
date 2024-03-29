@@ -1,19 +1,23 @@
 """
 Application to turn recipes into a shopping list
 """
-from datetime import datetime
+
 import pint
+import json
 import toga
 import os
+from pathlib import Path
+import shutil
+import sys
 from collections import Counter
 from recipeapp.db.sqlite_helper.SQLiteHelper import SQLiteHelper
-from recipeapp.gdrive.GoogleDriveHelper import GoogleDriveHelper
 from toga.style import Pack
-from toga.style.pack import COLUMN, ROW
+from toga.style.pack import COLUMN, ROW, CENTER
 
 # Utility section ################################################################
 
-flatten = lambda l: [item for sublist in l for item in sublist]
+flatten: list = lambda l: [item for sublist in l for item in sublist]
+is_android: bool = hasattr(sys, 'getandroidapilevel')
 
 def most_common(l: list) -> any:
         """
@@ -54,22 +58,96 @@ class RecipeApp(toga.App):
             "": None
         }
 
-        self.db_helper = SQLiteHelper(f"{self.paths.app}/resources/recipe.db")
-        self.gdrive_folder = "recipe-app"
+        # android_path = "/data/data/com.example.recipeapp/files"
+
+        db_fname = "recipe.db"
+        db_res_fpath = f"{self.paths.app}/resources/{db_fname}"
+        db_fpath = f"{self.paths.data}/{db_fname}"
+
+        # if is_android:
+        #    db_fpath = f"{android_path}/{db_fname}"
+        # else:
+        #    db_fpath = f"{self.paths.data}/{db_fname}"
+
+        selections_fname = "selections.json"        
+        selections_res_fpath = f"{self.paths.app}/resources/{selections_fname}"
+        selections_fpath = f"{self.paths.data}/{selections_fname}"
+
+        # if is_android:
+        #     selections_fpath = f"{android_path}/{selections_fname}"
+        # else:    
+        #     selections_fpath = f"{self.paths.data}/{selections_fname}"
+
+        os.makedirs(self.paths.data, exist_ok=True)
+        
+        if not Path(db_fpath).is_file():
+            shutil.copyfile(db_res_fpath, db_fpath)
+
+        if not Path(selections_fpath).is_file():
+            shutil.copyfile(selections_res_fpath, selections_fpath)
+
+        print(f"{self.paths.data}/{db_fname}")
+        self.db_helper = SQLiteHelper(db_fpath)
+        self.selections_fpath = selections_fpath
+
+        with open(self.selections_fpath) as fp:
+            self.saved_selections = json.load(fp)
 
         main_box = toga.Box(style=Pack(direction=COLUMN))
-        
+
+        # Add label
+        selected_recipes_label =  toga.Label(
+            "Additional Items", 
+            style=Pack(text_align=CENTER)
+        )
+        main_box.add(selected_recipes_label)
+
+        # Add additional items
+        self.additional_items = self.get_additional_items_box(
+            self.saved_selections["additional_items"]
+        )
+        main_box.add(self.additional_items)
+
         # Add recipe selection box
         self.selection = self.get_recipe_selection_box()
         main_box.add(self.selection)
 
+        # Add label
+        selected_recipes_label =  toga.Label(
+            "Selected Recipes", 
+            style=Pack(text_align=CENTER)
+        )
+        main_box.add(selected_recipes_label)
+
         # Add selected recipes table box
-        self.selected_table = self.get_selected_table_box()
+        self.selected_table = self.get_selected_table_box(
+            self.saved_selections["selected_recipes"]
+        )
         main_box.add(self.selected_table)
 
-        # Add save shopping list button box
+        # Add populate cart button box
+        self.populate_cart = self.get_populate_cart_button_box()
+        main_box.add(self.populate_cart)
+
+        # Add label
+        selected_recipes_label =  toga.Label(
+            "Shopping Cart", 
+            style=Pack(text_align=CENTER)
+        )
+        main_box.add(selected_recipes_label)
+
+
+        # Add shopping cart table box
+        self.shopping_cart_table = self.get_shopping_cart_box()
+        main_box.add(self.shopping_cart_table)
+
+        # Add save button box
         self.save_button = self.get_save_button_box()
         main_box.add(self.save_button)
+
+        # Add load button box
+        self.load_button = self.get_load_button_box()
+        main_box.add(self.load_button)
 
         # Define main window
         self.main_window = toga.MainWindow(title=self.formal_name)
@@ -94,11 +172,11 @@ class RecipeApp(toga.App):
 
         return sorted([x[0] for x in self.db_helper.get_recipes()])
 
-    def get_selected_table_box(self):
+    def get_selected_table_box(self, selected_recipes=[]):
 
         selected_table_box = toga.Table(
             headings=["Recipe Name"],
-            data=[],
+            data = selected_recipes,
             on_activate=self.remove_recipe,
             style=Pack(
                 padding=5,
@@ -115,13 +193,13 @@ class RecipeApp(toga.App):
     def remove_recipe(self, widget, row):
 
         self.selected_table.data.remove(row)
+        self.shopping_cart_table.data.clear()
 
-    def get_save_button_box(self):
-
+    def get_populate_cart_button_box(self):
+        
         button_box = toga.Button(
-            "Save Shopping List",
-            # icon=toga.Icon("resources/google_drive_icon.png"), 
-            on_press=self.save_shopping_list,
+            "Populate Cart",
+            on_press=self.populate_cart,
             style=Pack(
                 padding=5
             )
@@ -129,39 +207,113 @@ class RecipeApp(toga.App):
 
         return button_box
     
-    def save_shopping_list(self, widget):
+    def populate_cart(self, widget):
 
-        data = self.get_shopping_list()
+        self.shopping_cart_table.data.clear()
+        data = self.get_ingredients()
 
         if data:
-            file_name = "recipe-{}.csv".format(datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-            file_path = f"{self.paths.app}/resources/{file_name}"
-            
-            with open(file_path, "w") as fp:
-                fp.write(data)
-
-            self.main_window.info_dialog(
-                "Saving",
-                'Saving "{}" to google drive folder "{}"'.format(
-                    file_name, self.gdrive_folder    
+        
+            for ingredient in data:
+                
+                self.shopping_cart_table.data.append(
+                    (            
+                        ingredient["ingredient"],
+                        ingredient["quantity"]
+                    )
                 )
-            )
-            
-            gdrive_hlp = GoogleDriveHelper(
-                 f"{self.paths.app}/resources/credentials.json",
-                 f"{self.paths.app}/resources/token.json",
-            )
-            
-            folder_id = gdrive_hlp.get_or_create_folder(self.gdrive_folder)
-            
-            gdrive_hlp.upload_csv_to_google_drive(
-                 file_path, 
-                 folder_id
-            )
 
-            os.remove(file_path)
+    def get_shopping_cart_box(self):
 
-    def get_shopping_list(self) -> list:
+        shopping_cart_box = toga.Table(
+            headings=["Ingredient", "Quantity"],
+            data=[],
+            on_activate=self.remove_ingredient,
+            style=Pack(
+                padding=5,
+                height=200
+            )
+        )
+
+        return shopping_cart_box
+    
+    def remove_ingredient(self, widget, row):
+
+        self.shopping_cart_table.data.remove(row)
+
+    def get_additional_items_box(self, value):
+
+        additional_items_box = toga.MultilineTextInput(
+            value=value,
+            style=Pack(
+                padding=5,
+                height=100
+            )
+        )
+
+        return additional_items_box
+    
+
+    def remove_additional_items(self, widget, row):
+
+        pass     
+
+    def get_save_button_box(self):
+
+        button_box = toga.Button(
+            "Save",
+            
+            on_press=self.save_selections,
+            style=Pack(
+                padding=5
+            )
+        )
+
+        return button_box 
+    
+    def save_selections(self, widget):
+
+        data = {
+            "selected_recipes": [row.recipe_name for row in self.selected_table.data],
+            "additional_items": self.additional_items.value
+        }
+
+
+        with open(self.selections_fpath, "w") as fp:
+            json.dump(data, fp, indent=2)
+
+        self.main_window.info_dialog(
+            "Saved",
+            "Selections saved"
+        )
+
+    def get_load_button_box(self):
+
+        button_box = toga.Button(
+            "Load",
+            on_press=self.load_selections,
+            style=Pack(
+                padding=5
+            )
+        )
+
+        return button_box 
+
+    def load_selections(self, widget):
+
+        with open(self.selections_fpath) as fp:
+            data = json.load(fp)
+
+        self.selected_table.data = data["selected_recipes"]
+        self.additional_items.value = data["additional_items"]
+
+        # Debugging
+        # self.main_window.info_dialog(
+        #     "Info",
+        #     str(data["selected_recipes"]) + " " + self.additional_items.value
+        # )
+
+    def get_ingredients(self) -> list:
 
         ingredients = []
 
@@ -199,12 +351,8 @@ class RecipeApp(toga.App):
 
         ingredient_to_all = {**ingredient_to_quantity, **ingredient_to_count}
 
-        data = "Recipe Name,,,Additional Items \n"
-        for row in self.selected_table.data:
-            data += "%s,,, \n" % (row.recipe_name)        
-        data += ",,,\n"
+        data = []
 
-        data += "Ingredient,Quantity,,\n"
         for k, _ in ingredient_to_all.items():
             
             try:
@@ -218,11 +366,21 @@ class RecipeApp(toga.App):
                 pass
 
             if k not in ingredient_to_count and k in ingredient_to_quantity:
-                data += "%s,%.2f %s\n" % (k, q.m_as(ingredient_to_unit[k]), ingredient_to_unit[k])
+                data.append({
+                    "ingredient": k, 
+                    "quantity": "%.2f %s" % (q.m_as(ingredient_to_unit[k]), ingredient_to_unit[k])
+                })
             elif k in ingredient_to_count and k not in ingredient_to_quantity:
-                data += "%s,%d items\n" % (k, c)
+                data.append({
+                    "ingredient": k, 
+                    "quantity": "%d items" % (c)
+                })
             elif k in ingredient_to_count and k in ingredient_to_quantity:
-                data += "%s,%.2f %s and %d items\n" % (k, q.m_as(ingredient_to_unit[k]), ingredient_to_unit[k], c)
+                data.append({
+                    "ingredient": k, 
+                    "quantity": "%.2f %s and %d items" % (q.m_as(ingredient_to_unit[k]), ingredient_to_unit[k], c)
+                })
+                
 
         return data
 

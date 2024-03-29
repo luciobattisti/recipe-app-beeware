@@ -22,10 +22,6 @@ test_sources = [
 ]
 
 requires = [
-    "google-auth",
-    "google-auth-oauthlib",
-    "google-auth-httplib2",
-    "google-api-python-client",
     "pint==0.8.1"
 ]
 test_requires = ["pytest",]
