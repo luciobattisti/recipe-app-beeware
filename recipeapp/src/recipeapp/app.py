@@ -369,11 +369,7 @@ class RecipeApp(toga.App):
             )
         )
 
-        return additional_items_box
-    
-    def remove_additional_items(self, widget, row):
-
-        pass     
+        return additional_items_box 
 
     def get_save_button_box(self):
 
@@ -609,7 +605,7 @@ class RecipeApp(toga.App):
             return
 
         success = self.db_helper.add_recipe(
-                self.recipe_name_input.value.lower(), 
+                self.recipe_name_input.value.lower().strip(), 
                 ingredients
             )
         
@@ -638,7 +634,7 @@ class RecipeApp(toga.App):
 
     def delete_recipe(self, widget):
 
-        recipe_name = self.recipe_name_input.value.lower()
+        recipe_name = self.recipe_name_input.value.lower().strip()
         if not recipe_name:
             self.main_window.info_dialog(
                 "Invalid Recipe Name",
